@@ -7,10 +7,10 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import {
-    getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+    getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, deleteUser, reauthenticateWithPopup
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
-    getFirestore, doc, getDoc, setDoc
+    getFirestore, doc, getDoc, setDoc, deleteDoc
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -32,14 +32,14 @@
   // use Firebase Auth/Firestore without rewriting the whole file as a module.
   window.__firebase = {
     auth, db, googleProvider,
-    signInWithPopup, signOut, onAuthStateChanged,
-    doc, getDoc, setDoc
+    signInWithPopup, signOut, onAuthStateChanged, deleteUser, reauthenticateWithPopup,
+    doc, getDoc, setDoc, deleteDoc
   };
   window.dispatchEvent(new Event('__firebase-ready'));
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{
+:root,:root[data-theme="light"]{
   --pink:#F8D7E6;--pink-mid:#E9A5B5;--pink-deep:#D4728E;--pink-dark:#9E3A5A;
   --cream:#FFF8F2;--ivory:#FDF5EE;--rose:#F2C4D4;
   --text:#3D2030;--text-mid:#7A4E63;--text-soft:#B08899;
@@ -47,8 +47,23 @@
   --green:#C8E6C9;--green-text:#2E7D32;
   --red:#FFCDD2;--red-text:#C62828;
   --amber:#FFF3E0;--amber-text:#E65100;
+  --modal-overlay:rgba(61,32,48,.35);
+  --scrollbar-track:var(--ivory);
+  --shadow-soft:rgba(209,114,142,.15);
 }
-body{font-family:'DM Sans',sans-serif;background:var(--ivory);color:var(--text);min-height:100vh}
+:root[data-theme="dark"]{
+  --pink:#3A2530;--pink-mid:#E5A4C4;--pink-deep:#D98FB3;--pink-dark:#E5A4C4;
+  --cream:#1E1E1E;--ivory:#121212;--rose:#2A2A2A;
+  --text:#F8F8F8;--text-mid:#D0D0D0;--text-soft:#9C8A93;
+  --white:#1E1E1E;--border:#3A3A3A;
+  --green:#1F3327;--green-text:#7FD896;
+  --red:#3A2024;--red-text:#F08A8A;
+  --amber:#3A2E1A;--amber-text:#F0B860;
+  --modal-overlay:rgba(0,0,0,.55);
+  --scrollbar-track:#1E1E1E;
+  --shadow-soft:rgba(0,0,0,.4);
+}
+body{font-family:'DM Sans',sans-serif;background:var(--ivory);color:var(--text);min-height:100vh;transition:background .25s ease,color .25s ease}
 h1,h2,h3,h4{font-family:'Playfair Display',serif}
 .app{display:flex;min-height:100vh}
 .sidebar{width:220px;background:var(--white);border-right:1px solid var(--border);padding:1.5rem 1rem;flex-shrink:0;display:flex;flex-direction:column;gap:.35rem}
@@ -116,7 +131,7 @@ textarea.form-input{resize:vertical;min-height:75px}
 .goal-emoji{font-size:1.6rem;margin-bottom:.5rem}
 .goal-name{font-size:.92rem;font-weight:600;color:var(--text)}
 .goal-meta{font-size:.75rem;color:var(--text-soft);margin:.2rem 0 .6rem}
-.modal-overlay{position:fixed;inset:0;background:rgba(61,32,48,.35);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(2px)}
+.modal-overlay{position:fixed;inset:0;background:var(--modal-overlay);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(2px)}
 .modal{background:var(--white);border-radius:20px;padding:1.75rem;width:min(480px,94vw);max-height:90vh;overflow-y:auto;border:1px solid var(--border)}
 .modal-title{font-size:1.2rem;color:var(--pink-dark);margin-bottom:1.25rem}
 .modal-footer{display:flex;gap:.6rem;justify-content:flex-end;margin-top:1.25rem}
@@ -133,7 +148,7 @@ textarea.form-input{resize:vertical;min-height:75px}
 .budget-amounts{color:var(--text-soft)}
 .tabs{display:flex;gap:.4rem;background:var(--pink);border-radius:12px;padding:.25rem}
 .tab{padding:.4rem .85rem;border-radius:9px;font-size:.8rem;cursor:pointer;color:var(--text-mid);transition:all .18s;border:none;background:none;font-family:'DM Sans',sans-serif}
-.tab.active{background:var(--white);color:var(--pink-dark);font-weight:500;box-shadow:0 1px 4px rgba(209,114,142,.15)}
+.tab.active{background:var(--white);color:var(--pink-dark);font-weight:500;box-shadow:0 1px 4px var(--shadow-soft)}
 .search-bar{display:flex;gap:.6rem;margin-bottom:1rem}
 .search-input{flex:1;border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;font-size:.85rem;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--ivory);outline:none}
 .search-input:focus{border-color:var(--pink-mid)}
@@ -144,11 +159,41 @@ textarea.form-input{resize:vertical;min-height:75px}
 .auth-sub{font-size:.85rem;color:var(--text-soft);margin-bottom:2rem;line-height:1.6}
 .google-btn{display:flex;align-items:center;justify-content:center;gap:.7rem;width:100%;border:1.5px solid var(--border);border-radius:12px;padding:.75rem 1rem;background:var(--white);cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.9rem;color:var(--text);transition:all .2s}
 .google-btn:hover{background:var(--pink);border-color:var(--pink-mid)}
+.guest-btn{display:flex;align-items:center;justify-content:center;gap:.6rem;width:100%;border:1.5px dashed var(--pink-mid);border-radius:12px;padding:.75rem 1rem;background:transparent;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.88rem;color:var(--pink-dark);transition:all .2s;margin-top:.7rem;font-weight:500}
+.guest-btn:hover{background:var(--pink)}
+.auth-divider{display:flex;align-items:center;gap:.6rem;margin:1.1rem 0;font-size:.72rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.06em}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border)}
 .feature-list{text-align:left;margin:1.5rem 0;display:flex;flex-direction:column;gap:.5rem}
 .feature-item{display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:var(--text-mid)}
 .topbar-title{font-size:1.1rem;color:var(--text)}
-.user-chip{display:flex;align-items:center;gap:.5rem;background:var(--pink);border-radius:20px;padding:.35rem .75rem;font-size:.8rem;color:var(--pink-dark)}
-.avatar{width:26px;height:26px;border-radius:50%;background:var(--pink-dark);color:var(--white);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:600}
+.user-chip{display:flex;align-items:center;gap:.5rem;background:var(--pink);border-radius:20px;padding:.35rem .6rem .35rem .75rem;font-size:.8rem;color:var(--pink-dark);cursor:pointer;border:none;font-family:'DM Sans',sans-serif;transition:all .18s}
+.user-chip:hover{background:var(--rose)}
+.user-chip .chevron{font-size:.6rem;margin-left:.1rem;opacity:.75}
+.avatar{width:26px;height:26px;border-radius:50%;background:var(--pink-dark);color:var(--white);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:600;flex-shrink:0}
+
+/* Guest ribbon */
+.guest-ribbon{background:linear-gradient(135deg,var(--pink) 0%,var(--rose) 100%);border-bottom:1px solid var(--border);padding:.65rem 1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.guest-ribbon-text{font-size:.82rem;color:var(--pink-dark);display:flex;align-items:center;gap:.5rem;font-weight:500}
+.guest-ribbon-actions{display:flex;gap:.5rem;flex-shrink:0}
+
+/* Theme toggle */
+.theme-toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem .8rem;margin-bottom:.4rem;font-size:.8rem;color:var(--text-mid)}
+.theme-switch{position:relative;width:44px;height:24px;flex-shrink:0}
+.theme-switch input{opacity:0;width:0;height:0}
+.theme-switch-slider{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.25s}
+.theme-switch-slider::before{content:'☀️';position:absolute;height:18px;width:18px;left:3px;bottom:3px;border-radius:50%;background:var(--white);transition:.25s;display:flex;align-items:center;justify-content:center;font-size:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.theme-switch input:checked + .theme-switch-slider{background:var(--pink-deep)}
+.theme-switch input:checked + .theme-switch-slider::before{transform:translateX(20px);content:'🌙'}
+
+/* Account modal */
+.account-info-row{display:flex;justify-content:space-between;align-items:center;padding:.6rem 0;border-bottom:1px solid var(--border);font-size:.85rem}
+.account-info-row:last-child{border-bottom:none}
+.account-info-label{color:var(--text-soft)}
+.account-info-value{color:var(--text);font-weight:500;text-align:right}
+.account-menu-dropdown{position:absolute;top:calc(100% + 8px);right:0;background:var(--white);border:1px solid var(--border);border-radius:14px;box-shadow:0 4px 18px var(--shadow-soft);min-width:180px;z-index:50;overflow:hidden}
+.account-menu-item{display:block;width:100%;text-align:left;padding:.6rem .9rem;font-size:.82rem;color:var(--text-mid);background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;transition:background .15s}
+.account-menu-item:hover{background:var(--pink)}
+.account-menu-item.danger{color:var(--red-text)}
 .empty-state{text-align:center;padding:2.5rem 1rem;color:var(--text-soft)}
 .empty-state .empty-icon{font-size:2.5rem;margin-bottom:.8rem}
 .empty-state p{font-size:.88rem}
@@ -158,7 +203,7 @@ textarea.form-input{resize:vertical;min-height:75px}
 
 /* Notes section */
 .note-card{background:var(--white);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-bottom:.7rem;cursor:pointer;transition:box-shadow .18s}
-.note-card:hover{box-shadow:0 2px 12px rgba(209,114,142,.12)}
+.note-card:hover{box-shadow:0 2px 12px var(--shadow-soft)}
 .note-title{font-size:.92rem;font-weight:600;color:var(--text);margin-bottom:.3rem}
 .note-body{font-size:.82rem;color:var(--text-mid);line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .note-meta{font-size:.7rem;color:var(--text-soft);margin-top:.5rem}
@@ -179,7 +224,7 @@ textarea.form-input{resize:vertical;min-height:75px}
 .checklist-progress{font-size:.72rem;color:var(--text-soft);margin-left:.5rem}
 
 ::-webkit-scrollbar{width:5px}
-::-webkit-scrollbar-track{background:var(--ivory)}
+::-webkit-scrollbar-track{background:var(--scrollbar-track)}
 ::-webkit-scrollbar-thumb{background:var(--rose);border-radius:10px}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .fade-in{animation:fadeIn .3s ease forwards}
@@ -188,6 +233,10 @@ textarea.form-input{resize:vertical;min-height:75px}
   .grid-4{grid-template-columns:repeat(2,1fr)}
   .grid-3{grid-template-columns:1fr 1fr}
   .form-row{grid-template-columns:1fr}
+  .guest-ribbon{flex-direction:column;align-items:flex-start}
+  .guest-ribbon-actions{width:100%}
+  .guest-ribbon-actions .btn{flex:1}
+  .user-chip span.chip-label{display:none}
 }
 </style>
 </head>
@@ -216,7 +265,7 @@ const CATEGORIES = [
 const INCOME_SOURCES = ['Salary','Freelancing','Gift','Investment','Side Hustle','Other'];
 
 function defaultData() {
-  return {user:null,transactions:[],budgets:{},goals:[],categories:[...CATEGORIES],notes:[],checklists:[],nextId:1};
+  return {user:null,transactions:[],budgets:{},goals:[],categories:[...CATEGORIES],notes:[],checklists:[],nextId:1,openingBalance:0,theme:'light',createdAt:new Date().toISOString()};
 }
 
 // appData is the in-memory cache the whole app reads/writes synchronously,
@@ -226,6 +275,11 @@ let appData = defaultData();
 let _fb = null; // set once Firebase bridge script has loaded
 let _currentUid = null; // Firestore doc id (the signed-in user's uid)
 let _saveTimer = null;
+
+// GUEST MODE: when true, the app runs entirely in-memory for this browser
+// session. No Firestore reads or writes ever happen. Data is lost on
+// refresh/close, by design.
+let isGuestUser = false;
 
 function waitForFirebase() {
   return new Promise(resolve => {
@@ -242,6 +296,10 @@ async function loadUserData(uid, profile) {
   const snap = await getDoc(ref);
   if (snap.exists()) {
     const data = snap.data();
+    // Backfill fields that may not exist on older Firestore documents so
+    // existing users stay fully compatible with new features.
+    if (typeof data.openingBalance !== 'number') data.openingBalance = 0;
+    if (!data.theme) data.theme = 'light';
     return Object.assign(defaultData(), data, {user: profile});
   } else {
     const fresh = Object.assign(defaultData(), {user: profile});
@@ -254,6 +312,7 @@ async function loadUserData(uid, profile) {
 // Debounced slightly so rapid-fire changes (e.g. checklist toggles) collapse
 // into a single Firestore write instead of one per keystroke/click.
 function saveData(d) {
+  if (isGuestUser) return; // guest mode: never read/write Firestore
   if (!_currentUid || !_fb) return; // not signed in yet, nothing to sync
   clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
@@ -262,6 +321,43 @@ function saveData(d) {
       console.error('Firestore save failed:', err);
     });
   }, 350);
+}
+
+// DELETE ACCOUNT: removes the Firestore document, then the Firebase Auth
+// account itself, then signs out. Only ever called for signed-in (non-guest)
+// users — guests have no account to delete.
+async function deleteAccount() {
+  if (isGuestUser || !_fb || !_currentUid) return;
+  const { db, doc, deleteDoc, auth, signOut, deleteUser, reauthenticateWithPopup, googleProvider } = _fb;
+  try {
+    await deleteDoc(doc(db, 'users', _currentUid));
+    await deleteUser(auth.currentUser);
+  } catch (err) {
+    // Firebase requires a recent sign-in to delete an account; if the
+    // session is stale, silently re-authenticate via Google then retry once.
+    if (err?.code === 'auth/requires-recent-login') {
+      try {
+        await reauthenticateWithPopup(auth.currentUser, googleProvider);
+        await deleteDoc(doc(db, 'users', _currentUid));
+        await deleteUser(auth.currentUser);
+      } catch (err2) {
+        console.error('Account deletion failed after re-auth:', err2);
+        alert('Could not delete your account. Please try again.');
+        return;
+      }
+    } else {
+      console.error('Account deletion failed:', err);
+      alert('Could not delete your account. Please try again.');
+      return;
+    }
+  }
+  _currentUid = null;
+  appData = defaultData();
+  state.signedIn = false;
+  state.modal = null;
+  state.accountMenuOpen = false;
+  applyTheme('light');
+  render();
 }
 
 function genId() { const id = (appData.nextId||1); appData.nextId = id+1; saveData(appData); return id; }
@@ -273,6 +369,16 @@ function fmtShort(n) {
   if(Math.abs(n) >= 100000) return '₹' + (n/100000).toFixed(1) + 'L';
   if(Math.abs(n) >= 1000) return '₹' + (n/1000).toFixed(1) + 'k';
   return fmt(n);
+}
+
+// Opening balance is a starting point, never a transaction. It's always
+// folded into the running balance but never appears in income totals,
+// charts, or exports.
+function getOpeningBalance() { return appData.openingBalance || 0; }
+function getCurrentBalance() {
+  const totalIncome = appData.transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const totalExpense = appData.transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  return getOpeningBalance() + totalIncome - totalExpense;
 }
 
 function thisMonth() { const now = new Date(); return {y:now.getFullYear(),m:now.getMonth()}; }
@@ -299,11 +405,30 @@ function getMonthlyTotals(type, months=6) {
 function getCatColor(catId) { const c=appData.categories.find(c=>c.id===catId); return c?c.color:'#E0E0E0'; }
 function getCat(catId) { return appData.categories.find(c=>c.id===catId)||{name:'Other',icon:'📦'}; }
 
+// THEME: applies immediately to the DOM, and persists per the rules:
+// signed-in users -> Firestore (appData.theme, via saveData); guests -> localStorage.
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme==='dark'?'dark':'light');
+}
+function setTheme(theme) {
+  theme = theme==='dark' ? 'dark' : 'light';
+  appData.theme = theme;
+  applyTheme(theme);
+  if (isGuestUser) {
+    try { localStorage.setItem('hobi_guest_theme', theme); } catch(e) {}
+  } else {
+    saveData(appData);
+  }
+}
+function loadGuestTheme() {
+  try { return localStorage.getItem('hobi_guest_theme') || 'light'; } catch(e) { return 'light'; }
+}
+
 let state = {
   view:'dashboard', modal:null,
   txFilter:'all', txSearch:'',
   editingTx:null, signedIn:false, authLoading:true,
-  expandedNote:null,
+  expandedNote:null, accountMenuOpen:false, needsOpeningBalance:false,
 };
 
 function setState(patch) { Object.assign(state,patch); render(); }
@@ -313,10 +438,12 @@ const root = document.getElementById('root');
 function render() {
   if(state.authLoading) { root.innerHTML = renderLoading(); return; }
   if(!state.signedIn) { root.innerHTML = renderAuth(); attachAuthEvents(); return; }
+  if(state.needsOpeningBalance) { root.innerHTML = renderOpeningBalanceSetup(); attachOpeningBalanceEvents(); return; }
   root.innerHTML = `
     <div class="app">
       ${renderSidebar()}
       <div class="main">
+        ${isGuestUser ? renderGuestRibbon() : ''}
         ${renderTopbar()}
         <div class="content fade-in">${renderView()}</div>
       </div>
@@ -356,7 +483,11 @@ function renderAuth() {
           <svg style="width:20px;height:20px" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
           Continue with Google
         </button>
-        <p style="font-size:.72rem;color:var(--text-soft);margin-top:1.2rem">Your data stays private & secure 🔒</p>
+        <div class="auth-divider">or</div>
+        <button class="guest-btn" id="guest-signin">
+          🌷 Continue as Guest
+        </button>
+        <p style="font-size:.72rem;color:var(--text-soft);margin-top:1.2rem">Guest data stays on this device only, for this session 🔒</p>
       </div>
     </div>
   `;
@@ -377,6 +508,83 @@ function attachAuthEvents() {
       if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
     }
   });
+  document.getElementById('guest-signin')?.addEventListener('click', () => {
+    startGuestSession();
+  });
+}
+
+// GUEST MODE: spins up a fully in-memory session. Never touches Firebase.
+function startGuestSession() {
+  isGuestUser = true;
+  _currentUid = null;
+  appData = Object.assign(defaultData(), {
+    user: {name:'Guest User', email:'', initials:'G', photoURL:''},
+    theme: loadGuestTheme(),
+  });
+  applyTheme(appData.theme);
+  state.signedIn = true;
+  state.authLoading = false;
+  state.needsOpeningBalance = true;
+  render();
+}
+
+// OPENING BALANCE SETUP — shown once, right after a brand-new account is
+// created (signup), before the dashboard is ever seen. Never an income
+// transaction: it's stored separately on the profile and folded into every
+// balance calculation (see getCurrentBalance).
+function renderOpeningBalanceSetup() {
+  return `
+    <div class="auth-screen">
+      <div class="auth-card" style="text-align:left">
+        <div class="auth-logo" style="text-align:center">💰</div>
+        <h1 class="auth-title" style="text-align:center;font-size:1.7rem">Set Your Starting Balance</h1>
+        <p class="auth-sub" style="text-align:center">Enter the amount you currently have available in your bank account, wallet, or savings. This lets you start tracking from your current financial position without entering historical transactions.</p>
+        <div class="form-group">
+          <label class="form-label">Opening Balance (₹)</label>
+          <input class="form-input" id="opening-balance-input" type="number" min="0" step="0.01" placeholder="0.00" autofocus>
+        </div>
+        <button class="btn btn-primary" id="opening-balance-save" style="width:100%;margin-top:.5rem;padding:.7rem">Save & Continue 🌸</button>
+      </div>
+    </div>
+  `;
+}
+
+function attachOpeningBalanceEvents() {
+  document.getElementById('opening-balance-input')?.focus();
+  document.getElementById('opening-balance-save')?.addEventListener('click', () => {
+    const val = parseFloat(document.getElementById('opening-balance-input')?.value);
+    appData.openingBalance = isNaN(val) ? 0 : val;
+    saveData(appData);
+    state.needsOpeningBalance = false;
+    render();
+  });
+}
+
+function renderGuestRibbon() {
+  return `
+    <div class="guest-ribbon">
+      <div class="guest-ribbon-text"><span>🌷</span> You're using Guest Mode. Sign in to securely save and sync your financial data.</div>
+      <div class="guest-ribbon-actions">
+        <button class="btn btn-ghost btn-sm" id="ribbon-login-btn">Log In</button>
+        <button class="btn btn-primary btn-sm" id="ribbon-signup-btn">Sign Up</button>
+      </div>
+    </div>
+  `;
+}
+
+// Leaves guest mode and drops the user back on the real auth screen so they
+// can sign in for real. Guest data is intentionally discarded here, per spec
+// (guest data only ever lives for the current browser session).
+function exitGuestSession() {
+  if (isGuestUser && appData.transactions.length > 0) {
+    if (!confirm("Your guest session data will be lost when you sign in. Continue?")) return;
+  }
+  isGuestUser = false;
+  _currentUid = null;
+  appData = defaultData();
+  state.signedIn = false;
+  state.accountMenuOpen = false;
+  render();
 }
 
 function renderSidebar() {
@@ -390,6 +598,7 @@ function renderSidebar() {
     {id:'reports',icon:'📊',label:'Reports'},
     {id:'categories',icon:'🏷️',label:'Categories'},
   ];
+  const isDark = appData.theme==='dark';
   return `
     <nav class="sidebar">
       <div class="brand">
@@ -399,6 +608,13 @@ function renderSidebar() {
       </div>
       ${navs.map(n=>`<button class="nav-item ${state.view===n.id?'active':''}" data-view="${n.id}"><span class="nav-icon">${n.icon}</span>${n.label}</button>`).join('')}
       <div style="flex:1"></div>
+      <div class="theme-toggle-row">
+        <span>${isDark?'🌙 Dark Theme':'☀️ White Theme'}</span>
+        <label class="theme-switch">
+          <input type="checkbox" id="theme-toggle-input" ${isDark?'checked':''}>
+          <span class="theme-switch-slider"></span>
+        </label>
+      </div>
       <button class="nav-item" id="signout-btn"><span class="nav-icon">👋</span>Sign Out</button>
     </nav>
   `;
@@ -411,7 +627,15 @@ function renderTopbar() {
       <h2 class="topbar-title" style="font-family:'Playfair Display',serif">${titles[state.view]||'hobi'}</h2>
       <div style="display:flex;align-items:center;gap:.8rem">
         <button class="btn btn-primary btn-sm" id="quick-add-btn">+ Add Entry</button>
-        <div class="user-chip"><div class="avatar">${appData.user?.initials||'Y'}</div>${appData.user?.name||'You'}</div>
+        <div style="position:relative">
+          <button class="user-chip" id="account-menu-btn"><div class="avatar">${appData.user?.initials||'Y'}</div><span class="chip-label">Account</span><span class="chevron">▼</span></button>
+          ${state.accountMenuOpen?`
+            <div class="account-menu-dropdown" id="account-menu-dropdown">
+              <button class="account-menu-item" id="open-account-modal-btn">👤 Account Details</button>
+              <button class="account-menu-item" id="chip-signout-btn">👋 Sign Out</button>
+            </div>
+          `:''}
+        </div>
       </div>
     </div>
   `;
@@ -438,6 +662,7 @@ function renderDashboard() {
   const monthExpense = txs.filter(t=>t.type==='expense'&&isThisMonth(t.date)).reduce((s,t)=>s+t.amount,0);
   const netSavings = monthIncome - monthExpense;
   const savingsRate = monthIncome>0 ? Math.round(netSavings/monthIncome*100) : 0;
+  const currentBalance = getCurrentBalance();
   const catMap = {};
   txs.filter(t=>t.type==='expense'&&isThisMonth(t.date)).forEach(t=>{catMap[t.category]=(catMap[t.category]||0)+t.amount;});
   const topCat = Object.entries(catMap).sort((a,b)=>b[1]-a[1])[0];
@@ -451,6 +676,13 @@ function renderDashboard() {
     if(monthIncome>0) insights.push({icon:'✨',text:`You have <strong>${fmt(Math.max(0,monthIncome-monthExpense))}</strong> remaining from your income.`});
   }
   return `
+    <div class="card accent-lilac" style="margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
+      <div>
+        <div class="stat-label">Current Balance</div>
+        <div class="stat-value" style="font-size:1.8rem;color:${currentBalance>=0?'var(--text)':'var(--red-text)'}">${fmt(currentBalance)}</div>
+      </div>
+      <div style="font-size:.78rem;color:var(--text-soft);text-align:right">Includes opening balance of ${fmt(getOpeningBalance())}</div>
+    </div>
     <div class="grid-4">
       <div class="stat-card accent-mint"><div class="stat-icon">💚</div><div class="stat-label">This Month Income</div><div class="stat-value">${fmt(monthIncome)}</div></div>
       <div class="stat-card accent-pink"><div class="stat-icon">🌹</div><div class="stat-label">This Month Expenses</div><div class="stat-value">${fmt(monthExpense)}</div></div>
@@ -708,10 +940,11 @@ function renderReports() {
     `).join('')}
     <div class="card" style="margin-top:1rem">
       <h3 class="section-title" style="margin-bottom:1rem">All-Time Summary</h3>
-      <div class="grid-3">
+      <div class="grid-4">
+        <div class="stat-card accent-lilac"><div class="stat-label">Opening Balance</div><div class="stat-value" style="font-size:1.15rem">${fmt(getOpeningBalance())}</div></div>
         <div class="stat-card accent-mint"><div class="stat-label">Total Income</div><div class="stat-value" style="font-size:1.15rem">${fmt(totalIncome)}</div></div>
         <div class="stat-card accent-pink"><div class="stat-label">Total Expenses</div><div class="stat-value" style="font-size:1.15rem">${fmt(totalExpense)}</div></div>
-        <div class="stat-card accent-lilac"><div class="stat-label">Net Savings</div><div class="stat-value" style="font-size:1.15rem;color:${totalIncome-totalExpense>=0?'var(--green-text)':'var(--red-text)'}">${fmt(totalIncome-totalExpense)}</div></div>
+        <div class="stat-card accent-rose"><div class="stat-label">Current Balance</div><div class="stat-value" style="font-size:1.15rem;color:${getCurrentBalance()>=0?'var(--green-text)':'var(--red-text)'}">${fmt(getCurrentBalance())}</div></div>
       </div>
     </div>
   `;
@@ -744,6 +977,8 @@ function renderModal() {
   if(m.type==='add-cat') return renderAddCatModal();
   if(m.type==='add-note'||m.type==='edit-note') return renderNoteModal(m);
   if(m.type==='add-checklist') return renderChecklistModal();
+  if(m.type==='account') return renderAccountModal();
+  if(m.type==='edit-opening-balance') return renderEditOpeningBalanceModal();
   return '';
 }
 
@@ -903,6 +1138,61 @@ function renderAddCatModal() {
   `;
 }
 
+// ACCOUNT MODAL
+function renderAccountModal() {
+  const u = appData.user || {};
+  let createdLabel = 'Not Available';
+  if (isGuestUser) {
+    createdLabel = 'Not Available';
+  } else if (u.createdAt) {
+    const d = new Date(u.createdAt);
+    if (!isNaN(d)) createdLabel = d.toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
+  }
+  return `
+    <div class="modal-overlay" id="modal-overlay">
+      <div class="modal">
+        <h3 class="modal-title">👤 Account</h3>
+        <h4 style="font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-soft);margin-bottom:.4rem">Account Information</h4>
+        <div style="border:1px solid var(--border);border-radius:12px;padding:.2rem .9rem;margin-bottom:1.25rem">
+          <div class="account-info-row"><span class="account-info-label">Name</span><span class="account-info-value">${isGuestUser?'Guest User':(u.name||'You')}</span></div>
+          <div class="account-info-row"><span class="account-info-label">Email</span><span class="account-info-value">${isGuestUser?'Not Available':(u.email||'—')}</span></div>
+          <div class="account-info-row"><span class="account-info-label">Account Type</span><span class="account-info-value">${isGuestUser?'Guest':'Signed In'}</span></div>
+          <div class="account-info-row"><span class="account-info-label">Account Created</span><span class="account-info-value">${createdLabel}</span></div>
+          <div class="account-info-row"><span class="account-info-label">Opening Balance</span><span class="account-info-value">${fmt(getOpeningBalance())}</span></div>
+        </div>
+        <h4 style="font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-soft);margin-bottom:.6rem">Actions</h4>
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+          <button class="btn btn-ghost" id="acct-edit-balance-btn" style="width:100%">✏️ Edit Opening Balance</button>
+          <button class="btn btn-ghost" id="acct-edit-profile-btn" style="width:100%">👤 Edit Profile</button>
+          <button class="btn btn-danger" id="acct-delete-btn" style="width:100%">🗑️ Delete Account</button>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="modal-cancel">Close</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEditOpeningBalanceModal() {
+  return `
+    <div class="modal-overlay" id="modal-overlay">
+      <div class="modal">
+        <h3 class="modal-title">✏️ Edit Opening Balance</h3>
+        <p style="font-size:.82rem;color:var(--text-soft);margin-bottom:1rem">This is your starting balance — it's not recorded as income, but is always included in your balance calculations.</p>
+        <div class="form-group">
+          <label class="form-label">Opening Balance (₹)</label>
+          <input class="form-input" id="edit-opening-balance-input" type="number" min="0" step="0.01" value="${getOpeningBalance()}">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="edit-opening-balance-save">Save 🌸</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 // CHARTS
 let charts = {};
 function destroyCharts() { Object.values(charts).forEach(c=>{try{c.destroy()}catch(e){}}); charts={}; }
@@ -923,17 +1213,20 @@ function renderPieChart() {
   const colors = entries.map(e=>getCatColor(e[0]));
   const legend = document.getElementById('pie-legend');
   if(legend) legend.innerHTML = entries.map((e,i)=>`<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:${colors[i]};display:inline-block"></span>${getCat(e[0]).name}: ${fmt(e[1])}</span>`).join('');
-  charts.pie = new Chart(canvas,{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:2,borderColor:'#FFF8F2'}]},options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{display:false}}}});
+  const cardBg = appData.theme==='dark' ? '#1E1E1E' : '#FFF8F2';
+  charts.pie = new Chart(canvas,{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:2,borderColor:cardBg}]},options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{display:false}}}});
 }
 
 function renderTrendChart() {
   const canvas = document.getElementById('trendChart'); if(!canvas) return;
   const incomes = getMonthlyTotals('income',6);
   const expenses = getMonthlyTotals('expense',6);
+  const tickColor = appData.theme==='dark' ? '#D0D0D0' : '#7A4E63';
+  const gridColor = appData.theme==='dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.04)';
   charts.trend = new Chart(canvas,{type:'line',data:{labels:incomes.map(d=>d.label),datasets:[
     {label:'Income',data:incomes.map(d=>d.total),borderColor:'#A8D8A8',backgroundColor:'rgba(168,216,168,.12)',tension:.4,pointRadius:3},
     {label:'Expenses',data:expenses.map(d=>d.total),borderColor:'#E9A5B5',backgroundColor:'rgba(233,165,181,.12)',tension:.4,pointRadius:3,borderDash:[4,3]}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:'rgba(0,0,0,.04)'},ticks:{callback:v=>fmtShort(v)}}}}});
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:tickColor}},y:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtShort(v)}}}}});
 }
 
 function renderSavingsChart() {
@@ -941,7 +1234,9 @@ function renderSavingsChart() {
   const incomes = getMonthlyTotals('income',6);
   const expenses = getMonthlyTotals('expense',6);
   const savings = incomes.map((d,i)=>({label:d.label,total:d.total-expenses[i].total}));
-  charts.savings = new Chart(canvas,{type:'bar',data:{labels:savings.map(d=>d.label),datasets:[{label:'Net Savings',data:savings.map(d=>d.total),backgroundColor:savings.map(d=>d.total>=0?'rgba(168,216,168,.7)':'rgba(245,160,160,.7)'),borderRadius:6,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:'rgba(0,0,0,.04)'},ticks:{callback:v=>fmtShort(v)}}}}});
+  const tickColor = appData.theme==='dark' ? '#D0D0D0' : '#7A4E63';
+  const gridColor = appData.theme==='dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.04)';
+  charts.savings = new Chart(canvas,{type:'bar',data:{labels:savings.map(d=>d.label),datasets:[{label:'Net Savings',data:savings.map(d=>d.total),backgroundColor:savings.map(d=>d.total>=0?'rgba(168,216,168,.7)':'rgba(245,160,160,.7)'),borderRadius:6,borderSkipped:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:tickColor}},y:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtShort(v)}}}}});
 }
 
 // EVENTS
@@ -949,9 +1244,31 @@ function attachEvents() {
   document.querySelectorAll('.nav-item[data-view]').forEach(el=>el.addEventListener('click',()=>setState({view:el.dataset.view,modal:null,expandedNote:null})));
   document.querySelectorAll('[data-view]:not(.nav-item)').forEach(el=>el.addEventListener('click',()=>setState({view:el.dataset.view,modal:null,expandedNote:null})));
   document.getElementById('signout-btn')?.addEventListener('click',async ()=>{
+    if (isGuestUser) { exitGuestSession(); return; }
     try { await _fb.signOut(_fb.auth); } catch(err){ console.error('Sign out failed:', err); }
     // onAuthStateChanged handles resetting appData/state once Firebase confirms sign-out.
   });
+  document.getElementById('ribbon-login-btn')?.addEventListener('click',()=>exitGuestSession());
+  document.getElementById('ribbon-signup-btn')?.addEventListener('click',()=>exitGuestSession());
+  document.getElementById('theme-toggle-input')?.addEventListener('change',e=>{
+    setTheme(e.target.checked?'dark':'light');
+    render();
+  });
+  document.getElementById('account-menu-btn')?.addEventListener('click',e=>{e.stopPropagation();setState({accountMenuOpen:!state.accountMenuOpen});});
+  document.getElementById('open-account-modal-btn')?.addEventListener('click',()=>setState({accountMenuOpen:false,modal:{type:'account'}}));
+  document.getElementById('chip-signout-btn')?.addEventListener('click',async ()=>{
+    state.accountMenuOpen=false;
+    if (isGuestUser) { exitGuestSession(); return; }
+    try { await _fb.signOut(_fb.auth); } catch(err){ console.error('Sign out failed:', err); }
+  });
+  if(state.accountMenuOpen){
+    document.addEventListener('click',function closeMenu(e){
+      if(!e.target.closest('#account-menu-dropdown')&&!e.target.closest('#account-menu-btn')){
+        setState({accountMenuOpen:false});
+        document.removeEventListener('click',closeMenu);
+      }
+    });
+  }
   document.getElementById('quick-add-btn')?.addEventListener('click',()=>setState({modal:{type:'add-tx',txType:'expense'}}));
   document.getElementById('modal-cancel')?.addEventListener('click',()=>setState({modal:null}));
   document.getElementById('modal-overlay')?.addEventListener('click',e=>{if(e.target.id==='modal-overlay')setState({modal:null});});
@@ -1068,6 +1385,26 @@ function attachEvents() {
     saveData(appData);setState({modal:null});
   });
 
+  // Account modal
+  document.getElementById('acct-edit-balance-btn')?.addEventListener('click',()=>setState({modal:{type:'edit-opening-balance'}}));
+  document.getElementById('edit-opening-balance-save')?.addEventListener('click',()=>{
+    const val=parseFloat(document.getElementById('edit-opening-balance-input')?.value);
+    appData.openingBalance=isNaN(val)?0:val;
+    saveData(appData);setState({modal:null});
+  });
+  document.getElementById('acct-edit-profile-btn')?.addEventListener('click',()=>{
+    alert('Profile editing is coming soon! 🌸');
+  });
+  document.getElementById('acct-delete-btn')?.addEventListener('click',async ()=>{
+    if (isGuestUser) {
+      alert('Guest accounts cannot be deleted because no account exists.');
+      return;
+    }
+    const confirmed = confirm('This action permanently deletes your account and all stored budgeting data. This cannot be undone.');
+    if (!confirmed) return;
+    await deleteAccount();
+  });
+
   // Export
   document.querySelectorAll('.export-btn').forEach(el=>el.addEventListener('click',()=>{
     const f=el.dataset.format;
@@ -1097,12 +1434,20 @@ async function init() {
         name: firebaseUser.displayName || 'You',
         email: firebaseUser.email || '',
         initials: (firebaseUser.displayName || 'You').trim().charAt(0).toUpperCase() || 'Y',
-        photoURL: firebaseUser.photoURL || ''
+        photoURL: firebaseUser.photoURL || '',
+        createdAt: firebaseUser.metadata?.creationTime || null
       };
       try {
+        isGuestUser = false;
         _currentUid = firebaseUser.uid;
+        const { db, doc, getDoc } = _fb;
+        const ref = doc(db, 'users', firebaseUser.uid);
+        const snapBefore = await getDoc(ref);
+        const isBrandNewUser = !snapBefore.exists();
         appData = await loadUserData(firebaseUser.uid, profile);
         state.signedIn = true;
+        state.needsOpeningBalance = isBrandNewUser;
+        applyTheme(appData.theme || 'light');
       } catch (err) {
         console.error('Failed to load Firestore data:', err);
         alert('Could not load your data. Please check your connection and refresh.');
@@ -1111,8 +1456,11 @@ async function init() {
       }
     } else {
       _currentUid = null;
-      appData = defaultData();
-      state.signedIn = false;
+      if (!isGuestUser) {
+        appData = defaultData();
+        state.signedIn = false;
+        applyTheme('light');
+      }
     }
     state.authLoading = false;
     render();

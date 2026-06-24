@@ -961,7 +961,11 @@ function renderCategories() {
         <div class="cat-item">
           <div class="cat-icon" style="background:${cat.color}30">${cat.icon}</div>
           <div style="flex:1"><div style="font-size:.88rem;font-weight:500;color:var(--text)">${cat.name}</div></div>
-          <div style="width:14px;height:14px;border-radius:50%;background:${cat.color};border:1px solid rgba(0,0,0,.1)"></div>
+          <div style="width:14px;height:14px;border-radius:50%;background:${cat.color};border:1px solid rgba(0,0,0,.1);margin-right:.6rem"></div>
+          <div style="display:flex;gap:.3rem">
+            <button class="btn btn-ghost btn-sm edit-cat-btn" data-id="${cat.id}" title="Edit category">✏️</button>
+            <button class="btn btn-danger btn-sm del-cat-btn" data-id="${cat.id}" title="Delete category">🗑️</button>
+          </div>
         </div>
       `).join('')}
     </div>
@@ -975,6 +979,8 @@ function renderModal() {
   if(m.type==='add-goal') return renderGoalModal();
   if(m.type==='add-goal-amt') return renderAddGoalAmtModal(m);
   if(m.type==='add-cat') return renderAddCatModal();
+  if(m.type==='edit-cat') return renderEditCatModal(m);
+  if(m.type==='delete-cat') return renderDeleteCatModal(m);
   if(m.type==='add-note'||m.type==='edit-note') return renderNoteModal(m);
   if(m.type==='add-checklist') return renderChecklistModal();
   if(m.type==='account') return renderAccountModal();
@@ -1132,6 +1138,62 @@ function renderAddCatModal() {
         <div class="modal-footer">
           <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
           <button class="btn btn-primary" id="cat-save">Add Category 🌸</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEditCatModal(m) {
+  const cat = appData.categories.find(c=>c.id===m.catId)||{};
+  return `
+    <div class="modal-overlay" id="modal-overlay">
+      <div class="modal">
+        <h3 class="modal-title">✏️ Edit Category</h3>
+        <div class="form-group"><label class="form-label">Category Name *</label><input class="form-input" id="cat-name" placeholder="e.g. Coffee ☕" value="${cat.name||''}"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Icon (emoji)</label><input class="form-input" id="cat-icon" placeholder="📦" maxlength="4" value="${cat.icon||''}"></div>
+          <div class="form-group"><label class="form-label">Color</label><input class="form-input" id="cat-color" type="color" value="${cat.color||'#F8D7E6'}"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+          <button class="btn btn-primary" id="cat-save" data-edit-id="${cat.id}">Save Changes 🌸</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDeleteCatModal(m) {
+  const cat = appData.categories.find(c=>c.id===m.catId)||{name:'Unknown',icon:'📦'};
+  const affected = appData.transactions.filter(t=>t.type==='expense' && t.category===m.catId);
+  const otherCats = appData.categories.filter(c=>c.id!==m.catId);
+  return `
+    <div class="modal-overlay" id="modal-overlay">
+      <div class="modal">
+        <h3 class="modal-title" style="color:var(--red-text)">🗑️ Delete Category</h3>
+        <div style="background:var(--red);border-radius:12px;padding:.85rem 1rem;margin-bottom:1.1rem">
+          <div style="font-size:.88rem;font-weight:500;color:var(--red-text);margin-bottom:.25rem">${cat.icon} ${cat.name}</div>
+          ${affected.length>0
+            ? `<div style="font-size:.82rem;color:var(--red-text)"><strong>${affected.length} expense transaction${affected.length!==1?'s':''}</strong> use this category and will be affected.</div>`
+            : `<div style="font-size:.82rem;color:var(--red-text)">No transactions use this category — safe to delete.</div>`
+          }
+        </div>
+        ${affected.length>0 ? `
+          <div class="form-group">
+            <label class="form-label">Reassign affected transactions to:</label>
+            <select class="form-input" id="cat-reassign">
+              ${otherCats.length>0
+                ? otherCats.map(c=>`<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')
+                : `<option value="">— No other categories —</option>`
+              }
+            </select>
+          </div>
+        ` : ''}
+        <p style="font-size:.8rem;color:var(--text-soft);margin-bottom:.25rem">This action cannot be undone.</p>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+          <button class="btn btn-danger" id="cat-delete-confirm" data-id="${m.catId}" ${affected.length>0&&otherCats.length===0?'disabled title="Add another category first to reassign transactions"':''}>Delete Category</button>
         </div>
       </div>
     </div>
@@ -1375,13 +1437,36 @@ function attachEvents() {
 
   // Categories
   document.getElementById('add-cat-btn')?.addEventListener('click',()=>setState({modal:{type:'add-cat'}}));
-  document.getElementById('cat-save')?.addEventListener('click',()=>{
+  document.getElementById('cat-save')?.addEventListener('click',function(){
     const name=document.getElementById('cat-name')?.value;
     const icon=document.getElementById('cat-icon')?.value||'📦';
     const color=document.getElementById('cat-color')?.value||'#F8D7E6';
     if(!name){alert('Please enter a category name.');return;}
-    const id=name.toLowerCase().replace(/[^a-z0-9]/g,'_')+'_'+Date.now();
-    appData.categories.push({id,name,icon,color});
+    const editId=this.dataset.editId;
+    if(editId){
+      const cat=appData.categories.find(c=>c.id===editId);
+      if(cat){cat.name=name;cat.icon=icon;cat.color=color;}
+    } else {
+      const id=name.toLowerCase().replace(/[^a-z0-9]/g,'_')+'_'+Date.now();
+      appData.categories.push({id,name,icon,color});
+    }
+    saveData(appData);setState({modal:null});
+  });
+  document.querySelectorAll('.edit-cat-btn').forEach(el=>el.addEventListener('click',()=>{
+    setState({modal:{type:'edit-cat',catId:el.dataset.id}});
+  }));
+  document.querySelectorAll('.del-cat-btn').forEach(el=>el.addEventListener('click',()=>{
+    setState({modal:{type:'delete-cat',catId:el.dataset.id}});
+  }));
+  document.getElementById('cat-delete-confirm')?.addEventListener('click',function(){
+    const catId=this.dataset.id;
+    const affected=appData.transactions.filter(t=>t.type==='expense'&&t.category===catId);
+    if(affected.length>0){
+      const reassignTo=document.getElementById('cat-reassign')?.value;
+      if(!reassignTo){alert('Please select a category to reassign transactions to.');return;}
+      appData.transactions.forEach(t=>{if(t.type==='expense'&&t.category===catId)t.category=reassignTo;});
+    }
+    appData.categories=appData.categories.filter(c=>c.id!==catId);
     saveData(appData);setState({modal:null});
   });
 

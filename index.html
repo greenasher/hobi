@@ -258,7 +258,6 @@ const CATEGORIES = [
   {id:'travel',name:'Travel',icon:'✈️',color:'#A8C4F5'},
   {id:'subscriptions',name:'Subscriptions',icon:'📱',color:'#D0A8E8'},
   {id:'personal',name:'Personal Care',icon:'✨',color:'#F5C8E0'},
-  {id:'savings',name:'Savings',icon:'💰',color:'#A8E8C8'},
   {id:'other',name:'Other',icon:'📦',color:'#D0C8C0'},
 ];
 
@@ -288,18 +287,24 @@ function waitForFirebase() {
   });
 }
 
-// Loads this user's document from Firestore. Creates it with default data
-// if it doesn't exist yet (first-ever sign-in).
 async function loadUserData(uid, profile) {
   const { db, doc, getDoc, setDoc } = _fb;
   const ref = doc(db, 'users', uid);
   const snap = await getDoc(ref);
+
   if (snap.exists()) {
     const data = snap.data();
-    // Backfill fields that may not exist on older Firestore documents so
-    // existing users stay fully compatible with new features.
+
     if (typeof data.openingBalance !== 'number') data.openingBalance = 0;
     if (!data.theme) data.theme = 'light';
+
+    // Remove legacy Savings category from older accounts
+    if (Array.isArray(data.categories)) {
+      data.categories = data.categories.filter(
+        c => c.id !== 'savings'
+      );
+    }
+
     return Object.assign(defaultData(), data, {user: profile});
   } else {
     const fresh = Object.assign(defaultData(), {user: profile});
@@ -307,7 +312,6 @@ async function loadUserData(uid, profile) {
     return fresh;
   }
 }
-
 // Drop-in replacement for the old localStorage saveData(appData) calls.
 // Debounced slightly so rapid-fire changes (e.g. checklist toggles) collapse
 // into a single Firestore write instead of one per keystroke/click.
@@ -1017,9 +1021,16 @@ function renderTxModal(m) {
               ${INCOME_SOURCES.map(s=>`<option value="${s.toLowerCase()}" ${(tx.source||'').toLowerCase()===s.toLowerCase()?'selected':''}>${s}</option>`).join('')}
             </select>
           `:`
-            <select class="form-input" id="tx-cat">
-              ${appData.categories.map(c=>`<option value="${c.id}" ${tx.category===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
-            </select>
+          <select class="form-input" id="tx-cat">
+  ${appData.categories
+    .filter(c => c.id !== 'savings')
+    .map(c=>`
+      <option value="${c.id}"
+        ${tx.category===c.id?'selected':''}>
+        ${c.icon} ${c.name}
+      </option>
+    `).join('')}
+</select>
           `}
         </div>
         <div class="form-group">

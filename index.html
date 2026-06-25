@@ -200,6 +200,13 @@ textarea.form-input{resize:vertical;min-height:75px}
 .report-card{border:1px solid var(--border);border-radius:14px;padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem}
 .report-info h4{font-size:.9rem;color:var(--text);margin-bottom:.2rem}
 .report-info p{font-size:.75rem;color:var(--text-soft)}
+.chart-wrap-cmp{position:relative;width:100%;height:260px}
+.widget-card{border:1px solid var(--border);border-radius:14px;padding:1.1rem 1.25rem;margin-bottom:1rem}
+.widget-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.6rem;margin-bottom:.85rem;flex-wrap:wrap}
+.widget-controls{display:flex;gap:.5rem;flex-wrap:wrap;flex:1}
+.widget-controls .form-input{min-width:130px;width:auto;padding:.4rem .65rem;font-size:.8rem}
+.widget-empty{text-align:center;padding:2rem 1rem;color:var(--text-soft);border:1.5px dashed var(--border);border-radius:14px}
+.widget-empty .empty-icon{font-size:2rem;margin-bottom:.6rem}
 
 /* Notes section */
 .note-card{background:var(--white);border:1px solid var(--border);border-radius:14px;padding:1rem;margin-bottom:.7rem;cursor:pointer;transition:box-shadow .18s}
@@ -263,8 +270,17 @@ const CATEGORIES = [
 
 const INCOME_SOURCES = ['Salary','Freelancing','Gift','Investment','Side Hustle','Other'];
 
+const INCOME_CATEGORIES = [
+  {id:'salary',name:'Salary',icon:'💼',color:'#A8D8A8'},
+  {id:'freelancing',name:'Freelancing',icon:'💻',color:'#A8C8E8'},
+  {id:'gift',name:'Gift',icon:'🎁',color:'#E8B4D8'},
+  {id:'investment',name:'Investment',icon:'📈',color:'#F5D060'},
+  {id:'side_hustle',name:'Side Hustle',icon:'🌟',color:'#C8B4E8'},
+  {id:'other',name:'Other',icon:'📦',color:'#D0C8C0'},
+];
+
 function defaultData() {
-  return {user:null,transactions:[],budgets:{},goals:[],categories:[...CATEGORIES],notes:[],checklists:[],nextId:1,openingBalance:0,theme:'light',createdAt:new Date().toISOString()};
+  return {user:null,transactions:[],budgets:{},goals:[],categories:[...CATEGORIES],incomeCategories:[...INCOME_CATEGORIES],notes:[],checklists:[],nextId:1,openingBalance:0,theme:'light',createdAt:new Date().toISOString()};
 }
 
 // appData is the in-memory cache the whole app reads/writes synchronously,
@@ -303,6 +319,27 @@ async function loadUserData(uid, profile) {
       data.categories = data.categories.filter(
         c => c.id !== 'savings'
       );
+    }
+
+    // Seed income categories for accounts created before income category
+    // management existed.
+    if (!Array.isArray(data.incomeCategories)) {
+      data.incomeCategories = [...INCOME_CATEGORIES];
+    }
+
+    // Backfill: older income transactions stored their source as free text
+    // in `source` while `category` was hardcoded to 'other'. Re-point
+    // `category` at the matching income category id (by name) so existing
+    // entries immediately display correctly instead of as "Other".
+    if (Array.isArray(data.transactions)) {
+      data.transactions.forEach(t => {
+        if (t.type === 'income' && t.source) {
+          const match = data.incomeCategories.find(
+            c => c.name.toLowerCase() === String(t.source).toLowerCase()
+          );
+          if (match) t.category = match.id;
+        }
+      });
     }
 
     return Object.assign(defaultData(), data, {user: profile});
@@ -406,8 +443,54 @@ function getMonthlyTotals(type, months=6) {
   return results;
 }
 
-function getCatColor(catId) { const c=appData.categories.find(c=>c.id===catId); return c?c.color:'#E0E0E0'; }
-function getCat(catId) { return appData.categories.find(c=>c.id===catId)||{name:'Other',icon:'📦'}; }
+function getCatColor(catId, type) { const list=type==='income'?appData.incomeCategories:appData.categories; const c=list.find(c=>c.id===catId); return c?c.color:'#E0E0E0'; }
+function getCat(catId, type) { const list=type==='income'?appData.incomeCategories:appData.categories; return list.find(c=>c.id===catId)||{name:'Other',icon:'📦'}; }
+
+// REPORT COMPARISON WIDGETS
+// Persisted to localStorage (separate from the Firestore-backed appData),
+// since these are device-local report customizations rather than financial
+// data that needs to sync across devices.
+const REPORT_WIDGETS_KEY = 'hobi_report_widgets';
+
+function loadReportWidgets() {
+  try {
+    const raw = localStorage.getItem(REPORT_WIDGETS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch(e) { return []; }
+}
+function saveReportWidgets(widgets) {
+  try { localStorage.setItem(REPORT_WIDGETS_KEY, JSON.stringify(widgets)); } catch(e) {}
+}
+
+let reportWidgets = loadReportWidgets();
+
+function monthOptionsList(count=12) {
+  // Most recent `count` months (including current), most recent first.
+  const now = new Date(); const opts = [];
+  for(let i=0;i<count;i++) {
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    opts.push({value:`${d.getFullYear()}-${d.getMonth()}`, label:d.toLocaleString('default',{month:'long',year:'numeric'})});
+  }
+  return opts;
+}
+
+function getMonthMetrics(year, month) {
+  const monthEnd = new Date(year, month+1, 0).toISOString().slice(0,10);
+  const income = appData.transactions.filter(t=>t.type==='income'&&sameMonth(t.date,year,month)).reduce((s,t)=>s+t.amount,0);
+  const expense = appData.transactions.filter(t=>t.type==='expense'&&sameMonth(t.date,year,month)).reduce((s,t)=>s+t.amount,0);
+  const savings = income - expense;
+  const balance = getOpeningBalance()
+    + appData.transactions.filter(t=>t.type==='income'&&t.date<=monthEnd).reduce((s,t)=>s+t.amount,0)
+    - appData.transactions.filter(t=>t.type==='expense'&&t.date<=monthEnd).reduce((s,t)=>s+t.amount,0);
+  return {income, expense, savings, balance};
+}
+function sameMonth(dateStr, year, month) {
+  const d = new Date(dateStr);
+  return d.getFullYear()===year && d.getMonth()===month;
+}
+function parseMonthKey(key) { const [y,m] = key.split('-').map(Number); return {year:y, month:m}; }
+function monthKeyLabel(key) { const {year,month} = parseMonthKey(key); return new Date(year,month,1).toLocaleString('default',{month:'short',year:'numeric'}); }
 
 // THEME: applies immediately to the DOM, and persists per the rules:
 // signed-in users -> Firestore (appData.theme, via saveData); guests -> localStorage.
@@ -431,6 +514,7 @@ function loadGuestTheme() {
 let state = {
   view:'dashboard', modal:null,
   txFilter:'all', txSearch:'',
+  txDateExact:'', txDateStart:'', txDateEnd:'',
   editingTx:null, signedIn:false, authLoading:true,
   expandedNote:null, accountMenuOpen:false, needsOpeningBalance:false,
 };
@@ -727,13 +811,37 @@ function renderTransactions() {
   if(state.txFilter!=='all') txs=txs.filter(t=>t.type===state.txFilter);
   if(state.txSearch) txs=txs.filter(t=>{
     const q=state.txSearch.toLowerCase();
-    return t.notes?.toLowerCase().includes(q)||getCat(t.category).name.toLowerCase().includes(q)||(t.source||'').toLowerCase().includes(q);
+    return t.notes?.toLowerCase().includes(q)||getCat(t.category, t.type).name.toLowerCase().includes(q)||(t.source||'').toLowerCase().includes(q);
   });
+  if(state.txDateExact) txs=txs.filter(t=>t.date===state.txDateExact);
+  else {
+    if(state.txDateStart) txs=txs.filter(t=>t.date>=state.txDateStart);
+    if(state.txDateEnd) txs=txs.filter(t=>t.date<=state.txDateEnd);
+  }
+  const filteredIncome = txs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const filteredExpense = txs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const hasDateFilter = state.txDateExact||state.txDateStart||state.txDateEnd;
+  const hasAnyFilter = state.txSearch||state.txFilter!=='all'||hasDateFilter;
   return `
     <div class="card" style="margin-bottom:1rem">
       <div class="search-bar">
         <input class="search-input" id="tx-search" placeholder="🔍  Search transactions..." value="${state.txSearch}">
         <button class="btn btn-primary" id="add-tx-btn">+ Add</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:.6rem;margin-bottom:.85rem;align-items:end">
+        <div>
+          <label style="font-size:.72rem;color:var(--text-soft);display:block;margin-bottom:.25rem;letter-spacing:.03em;text-transform:uppercase">Exact Date</label>
+          <input type="date" class="form-input" id="tx-date-exact" value="${state.txDateExact}" style="padding:.45rem .7rem;font-size:.83rem">
+        </div>
+        <div>
+          <label style="font-size:.72rem;color:var(--text-soft);display:block;margin-bottom:.25rem;letter-spacing:.03em;text-transform:uppercase">From</label>
+          <input type="date" class="form-input" id="tx-date-start" value="${state.txDateStart}" style="padding:.45rem .7rem;font-size:.83rem" ${state.txDateExact?'disabled':''}>
+        </div>
+        <div>
+          <label style="font-size:.72rem;color:var(--text-soft);display:block;margin-bottom:.25rem;letter-spacing:.03em;text-transform:uppercase">To</label>
+          <input type="date" class="form-input" id="tx-date-end" value="${state.txDateEnd}" style="padding:.45rem .7rem;font-size:.83rem" ${state.txDateExact?'disabled':''}>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="tx-clear-filters-btn" style="height:34px;white-space:nowrap;opacity:${hasAnyFilter?'1':'.4'};pointer-events:${hasAnyFilter?'auto':'none'}">✕ Clear</button>
       </div>
       <div class="tabs">
         <button class="tab ${state.txFilter==='all'?'active':''}" data-filter="all">All</button>
@@ -741,21 +849,30 @@ function renderTransactions() {
         <button class="tab ${state.txFilter==='expense'?'active':''}" data-filter="expense">Expenses</button>
       </div>
     </div>
+    ${txs.length>0?`
+    <div class="card" style="margin-bottom:1rem;display:flex;gap:1.5rem;flex-wrap:wrap">
+      <div><span style="font-size:.72rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em">Showing ${txs.length} transaction${txs.length!==1?'s':''}</span></div>
+      <div style="margin-left:auto;display:flex;gap:1.25rem;flex-wrap:wrap">
+        ${state.txFilter!=='expense'?`<span style="font-size:.82rem;color:var(--green-text);font-weight:500">+ ${fmt(filteredIncome)} income</span>`:''}
+        ${state.txFilter!=='income'?`<span style="font-size:.82rem;color:var(--red-text);font-weight:500">− ${fmt(filteredExpense)} expenses</span>`:''}
+      </div>
+    </div>`:''}
     <div class="card">
-      ${txs.length===0?'<div class="empty-state"><div class="empty-icon">🌸</div><p>No transactions yet.<br>Add your first one!</p></div>':txs.map(t=>renderTxRow(t,true)).join('')}
+      ${txs.length===0?'<div class="empty-state"><div class="empty-icon">🌸</div><p>No transactions match your filters.<br>Try adjusting the search or date range.</p></div>':txs.map(t=>renderTxRow(t,true)).join('')}
     </div>
   `;
 }
 
 function renderTxRow(t, showActions) {
-  const cat=getCat(t.category);
+  const cat=getCat(t.category, t.type);
   const d=new Date(t.date+'T00:00:00').toLocaleDateString('en-IN',{month:'short',day:'numeric'});
+  const extraSource = (t.source && t.source.toLowerCase()!==cat.name.toLowerCase()) ? ' · '+t.source : '';
   return `
     <div class="tx-row" data-id="${t.id}">
-      <div class="tx-icon" style="background:${getCatColor(t.category)}25">${cat.icon}</div>
+      <div class="tx-icon" style="background:${getCatColor(t.category, t.type)}25">${cat.icon}</div>
       <div class="tx-info">
         <div class="tx-name">${t.notes||cat.name}</div>
-        <div class="tx-meta">${cat.name} · ${d}${t.source?' · '+t.source:''}</div>
+        <div class="tx-meta">${cat.name} · ${d}${extraSource}</div>
       </div>
       ${showActions?`<div class="tx-actions"><button class="btn btn-ghost btn-sm edit-tx-btn" data-id="${t.id}">✏️</button><button class="btn btn-danger btn-sm del-tx-btn" data-id="${t.id}">🗑️</button></div>`:''}
       <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</div>
@@ -917,61 +1034,202 @@ function renderChecklist() {
 
 // REPORTS
 function renderReports() {
-  const monthLabel2 = new Date().toLocaleString('default',{month:'long',year:'numeric'});
-  const q = Math.ceil((new Date().getMonth()+1)/3);
-  const year = new Date().getFullYear();
-  const reports = [
-    {title:`${monthLabel2} Report`,period:'Monthly',count:appData.transactions.filter(t=>isThisMonth(t.date)).length},
-    {title:`Q${q} ${year} Report`,period:'Quarterly',count:appData.transactions.length},
-    {title:`${year} Annual Report`,period:'Yearly',count:appData.transactions.length},
-  ];
-  const totalIncome = appData.transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
-  const totalExpense = appData.transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const now = new Date();
+  const curY = now.getFullYear(), curM = now.getMonth();
+  const prevDate = new Date(curY, curM - 1, 1);
+  const prevY = prevDate.getFullYear(), prevM = prevDate.getMonth();
+
+  const isPrevMonth = dateStr => {
+    const d = new Date(dateStr);
+    return d.getFullYear() === prevY && d.getMonth() === prevM;
+  };
+
+  // All-time
+  const allIncome   = appData.transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const allExpense  = appData.transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const allSavings  = allIncome - allExpense;
+  const allBalance  = getCurrentBalance();
+
+  // Current month
+  const curIncome   = appData.transactions.filter(t=>t.type==='income'&&isThisMonth(t.date)).reduce((s,t)=>s+t.amount,0);
+  const curExpense  = appData.transactions.filter(t=>t.type==='expense'&&isThisMonth(t.date)).reduce((s,t)=>s+t.amount,0);
+  const curSavings  = curIncome - curExpense;
+  const curBalance  = getOpeningBalance() + allIncome - allExpense; // same as getCurrentBalance
+
+  // Previous month
+  const prevIncome  = appData.transactions.filter(t=>t.type==='income'&&isPrevMonth(t.date)).reduce((s,t)=>s+t.amount,0);
+  const prevExpense = appData.transactions.filter(t=>t.type==='expense'&&isPrevMonth(t.date)).reduce((s,t)=>s+t.amount,0);
+  const prevSavings = prevIncome - prevExpense;
+  // Previous month end balance: opening + all txs up to end of prev month
+  const prevMonthEnd = new Date(curY, curM, 0).toISOString().slice(0,10);
+  const prevBalance = getOpeningBalance()
+    + appData.transactions.filter(t=>t.type==='income'&&t.date<=prevMonthEnd).reduce((s,t)=>s+t.amount,0)
+    - appData.transactions.filter(t=>t.type==='expense'&&t.date<=prevMonthEnd).reduce((s,t)=>s+t.amount,0);
+
+  const curMonthLabel  = now.toLocaleString('default',{month:'long',year:'numeric'});
+  const prevMonthLabel = prevDate.toLocaleString('default',{month:'long',year:'numeric'});
+  const q    = Math.ceil((curM+1)/3);
+  const year = curY;
+
+  // Transaction counts for download cards
+  const curMonthTxCount  = appData.transactions.filter(t=>isThisMonth(t.date)).length;
+  const prevMonthTxCount = appData.transactions.filter(t=>isPrevMonth(t.date)).length;
+  const quarterTxCount   = appData.transactions.filter(t=>{
+    const d=new Date(t.date); const tq=Math.ceil((d.getMonth()+1)/3);
+    return d.getFullYear()===year && tq===q;
+  }).length;
+  const annualTxCount    = appData.transactions.filter(t=>new Date(t.date).getFullYear()===year).length;
+
+  function summaryGrid(income, expense, savings, balance, balanceLabel='Net Balance') {
+    const savColor = savings>=0?'var(--green-text)':'var(--red-text)';
+    const balColor = balance>=0?'var(--green-text)':'var(--red-text)';
+    return `<div class="grid-4">
+      <div class="stat-card accent-mint"><div class="stat-label">Total Income</div><div class="stat-value" style="font-size:1.15rem;color:var(--green-text)">${fmt(income)}</div></div>
+      <div class="stat-card accent-pink"><div class="stat-label">Total Expenses</div><div class="stat-value" style="font-size:1.15rem;color:var(--red-text)">${fmt(expense)}</div></div>
+      <div class="stat-card accent-rose"><div class="stat-label">Total Savings</div><div class="stat-value" style="font-size:1.15rem;color:${savColor}">${fmt(savings)}</div></div>
+      <div class="stat-card accent-lilac"><div class="stat-label">${balanceLabel}</div><div class="stat-value" style="font-size:1.15rem;color:${balColor}">${fmt(balance)}</div></div>
+    </div>`;
+  }
+
   return `
     <div class="card" style="margin-bottom:1rem">
-      <h3 class="section-title" style="margin-bottom:.5rem">Export & Reports</h3>
-      <p style="font-size:.82rem;color:var(--text-soft)">Download your financial data in your preferred format.</p>
+      <h3 class="section-title" style="margin-bottom:.25rem">All-Time Summary</h3>
+      <p style="font-size:.78rem;color:var(--text-soft);margin-bottom:1rem">Since you started tracking</p>
+      ${summaryGrid(allIncome, allExpense, allSavings, allBalance, 'Net Balance')}
     </div>
-    ${reports.map(r=>`
+
+    <div class="card" style="margin-bottom:1rem">
+      <h3 class="section-title" style="margin-bottom:.25rem">Current Month</h3>
+      <p style="font-size:.78rem;color:var(--text-soft);margin-bottom:1rem">${curMonthLabel}</p>
+      ${summaryGrid(curIncome, curExpense, curSavings, curBalance, 'Balance to Date')}
+    </div>
+
+    <div class="card" style="margin-bottom:1.25rem">
+      <h3 class="section-title" style="margin-bottom:.25rem">Previous Month</h3>
+      <p style="font-size:.78rem;color:var(--text-soft);margin-bottom:1rem">${prevMonthLabel}</p>
+      ${summaryGrid(prevIncome, prevExpense, prevSavings, prevBalance, 'End Balance')}
+    </div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <h3 class="section-title" style="margin-bottom:.5rem">Export & Reports</h3>
+      <p style="font-size:.82rem;color:var(--text-soft);margin-bottom:1rem">Download your financial data in your preferred format.</p>
+
       <div class="report-card">
-        <div class="report-info"><h4>${r.title}</h4><p>${r.count} transactions · ${r.period}</p></div>
+        <div class="report-info"><h4>Current Month Report</h4><p>${curMonthTxCount} transactions · ${curMonthLabel}</p></div>
         <div style="display:flex;gap:.5rem">
-          <button class="btn btn-ghost btn-sm export-btn" data-format="csv">CSV</button>
-          <button class="btn btn-ghost btn-sm export-btn" data-format="json">JSON</button>
-          <button class="btn btn-primary btn-sm export-btn" data-format="txt">Export 📥</button>
+          <button class="btn btn-ghost btn-sm export-btn" data-format="csv" data-period="current">CSV</button>
+          <button class="btn btn-ghost btn-sm export-btn" data-format="json" data-period="current">JSON</button>
+          <button class="btn btn-primary btn-sm export-btn" data-format="txt" data-period="current">Export 📥</button>
         </div>
       </div>
-    `).join('')}
-    <div class="card" style="margin-top:1rem">
-      <h3 class="section-title" style="margin-bottom:1rem">All-Time Summary</h3>
-      <div class="grid-4">
-        <div class="stat-card accent-lilac"><div class="stat-label">Opening Balance</div><div class="stat-value" style="font-size:1.15rem">${fmt(getOpeningBalance())}</div></div>
-        <div class="stat-card accent-mint"><div class="stat-label">Total Income</div><div class="stat-value" style="font-size:1.15rem">${fmt(totalIncome)}</div></div>
-        <div class="stat-card accent-pink"><div class="stat-label">Total Expenses</div><div class="stat-value" style="font-size:1.15rem">${fmt(totalExpense)}</div></div>
-        <div class="stat-card accent-rose"><div class="stat-label">Current Balance</div><div class="stat-value" style="font-size:1.15rem;color:${getCurrentBalance()>=0?'var(--green-text)':'var(--red-text)'}">${fmt(getCurrentBalance())}</div></div>
+
+      <div class="report-card">
+        <div class="report-info"><h4>Previous Month Report</h4><p>${prevMonthTxCount} transactions · ${prevMonthLabel}</p></div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-ghost btn-sm export-btn" data-format="csv" data-period="prev">CSV</button>
+          <button class="btn btn-ghost btn-sm export-btn" data-format="json" data-period="prev">JSON</button>
+          <button class="btn btn-primary btn-sm export-btn" data-format="txt" data-period="prev">Export 📥</button>
+        </div>
+      </div>
+
+      <div class="report-card">
+        <div class="report-info"><h4>Quarterly Reports</h4><p>${quarterTxCount} transactions · Q${q} ${year}</p></div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-ghost btn-sm export-btn" data-format="csv" data-period="quarter">CSV</button>
+          <button class="btn btn-ghost btn-sm export-btn" data-format="json" data-period="quarter">JSON</button>
+          <button class="btn btn-primary btn-sm export-btn" data-format="txt" data-period="quarter">Export 📥</button>
+        </div>
+      </div>
+
+      <div class="report-card">
+        <div class="report-info"><h4>Annual Reports</h4><p>${annualTxCount} transactions · ${year}</p></div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-ghost btn-sm export-btn" data-format="csv" data-period="annual">CSV</button>
+          <button class="btn btn-ghost btn-sm export-btn" data-format="json" data-period="annual">JSON</button>
+          <button class="btn btn-primary btn-sm export-btn" data-format="txt" data-period="annual">Export 📥</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="section-header"><h3 class="section-title">Month-over-Month Comparison</h3><span class="badge badge-pink">${curMonthLabel} vs ${prevMonthLabel}</span></div>
+      <div class="chart-wrap-cmp"><canvas id="defaultCompareChart" role="img" aria-label="Bar chart comparing income, expenses, savings and net balance between current and previous month"></canvas></div>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="section-header">
+        <h3 class="section-title">Custom Comparison Widgets</h3>
+        <button class="btn btn-primary btn-sm" id="add-widget-btn">+ Add Widget</button>
+      </div>
+      <div id="widgets-container">
+        ${reportWidgets.length===0
+          ? `<div class="widget-empty"><div class="empty-icon">📊</div><p>No custom widgets yet.<br>Add one to compare any two months, your way.</p></div>`
+          : reportWidgets.map(renderWidgetCard).join('')}
       </div>
     </div>
   `;
 }
 
+const CHART_TYPE_OPTIONS = [
+  {value:'bar', label:'📊 Bar'},
+  {value:'pie', label:'🥧 Pie'},
+  {value:'line', label:'📈 Line'},
+  {value:'doughnut', label:'🍩 Doughnut'},
+];
+
+function renderWidgetCard(w) {
+  const monthOpts = monthOptionsList(12);
+  return `
+    <div class="widget-card" data-widget-id="${w.id}">
+      <div class="widget-card-head">
+        <div class="widget-controls">
+          <select class="form-input widget-monthA" data-id="${w.id}">
+            ${monthOpts.map(o=>`<option value="${o.value}" ${o.value===w.monthA?'selected':''}>${o.label}</option>`).join('')}
+          </select>
+          <select class="form-input widget-monthB" data-id="${w.id}">
+            ${monthOpts.map(o=>`<option value="${o.value}" ${o.value===w.monthB?'selected':''}>${o.label}</option>`).join('')}
+          </select>
+          <select class="form-input widget-charttype" data-id="${w.id}">
+            ${CHART_TYPE_OPTIONS.map(o=>`<option value="${o.value}" ${o.value===w.chartType?'selected':''}>${o.label}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-danger btn-sm del-widget-btn" data-id="${w.id}" title="Delete widget">🗑️</button>
+      </div>
+      <div class="chart-wrap-cmp"><canvas id="widget-chart-${w.id}" role="img" aria-label="Custom comparison chart between ${monthKeyLabel(w.monthA)} and ${monthKeyLabel(w.monthB)}"></canvas></div>
+    </div>
+  `;
+}
+
 // CATEGORIES
+function renderCatItem(cat, kind) {
+  return `
+    <div class="cat-item">
+      <div class="cat-icon" style="background:${cat.color}30">${cat.icon}</div>
+      <div style="flex:1"><div style="font-size:.88rem;font-weight:500;color:var(--text)">${cat.name}</div></div>
+      <div style="width:14px;height:14px;border-radius:50%;background:${cat.color};border:1px solid rgba(0,0,0,.1);margin-right:.6rem"></div>
+      <div style="display:flex;gap:.3rem">
+        <button class="btn btn-ghost btn-sm edit-cat-btn" data-id="${cat.id}" data-kind="${kind}" title="Edit category">✏️</button>
+        <button class="btn btn-danger btn-sm del-cat-btn" data-id="${cat.id}" data-kind="${kind}" title="Delete category">🗑️</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderCategories() {
   return `
-    <div style="margin-bottom:1rem;display:flex;justify-content:flex-end">
+    <div style="margin-bottom:.6rem;display:flex;justify-content:space-between;align-items:center">
+      <h3 class="section-title" style="margin:0">Expense Categories</h3>
       <button class="btn btn-primary" id="add-cat-btn">+ New Category</button>
     </div>
+    <div class="card" style="margin-bottom:1.2rem">
+      ${appData.categories.filter(c=>c.id!=='savings').map(cat=>renderCatItem(cat,'expense')).join('')}
+    </div>
+    <div style="margin-bottom:.6rem;display:flex;justify-content:space-between;align-items:center">
+      <h3 class="section-title" style="margin:0">Income Categories</h3>
+      <button class="btn btn-primary" id="add-income-cat-btn">+ New Category</button>
+    </div>
     <div class="card">
-      ${appData.categories.map(cat=>`
-        <div class="cat-item">
-          <div class="cat-icon" style="background:${cat.color}30">${cat.icon}</div>
-          <div style="flex:1"><div style="font-size:.88rem;font-weight:500;color:var(--text)">${cat.name}</div></div>
-          <div style="width:14px;height:14px;border-radius:50%;background:${cat.color};border:1px solid rgba(0,0,0,.1);margin-right:.6rem"></div>
-          <div style="display:flex;gap:.3rem">
-            <button class="btn btn-ghost btn-sm edit-cat-btn" data-id="${cat.id}" title="Edit category">✏️</button>
-            <button class="btn btn-danger btn-sm del-cat-btn" data-id="${cat.id}" title="Delete category">🗑️</button>
-          </div>
-        </div>
-      `).join('')}
+      ${appData.incomeCategories.map(cat=>renderCatItem(cat,'income')).join('')}
     </div>
   `;
 }
@@ -982,7 +1240,7 @@ function renderModal() {
   if(m.type==='add-tx'||m.type==='edit-tx') return renderTxModal(m);
   if(m.type==='add-goal') return renderGoalModal();
   if(m.type==='add-goal-amt') return renderAddGoalAmtModal(m);
-  if(m.type==='add-cat') return renderAddCatModal();
+  if(m.type==='add-cat') return renderAddCatModal(m);
   if(m.type==='edit-cat') return renderEditCatModal(m);
   if(m.type==='delete-cat') return renderDeleteCatModal(m);
   if(m.type==='add-note'||m.type==='edit-note') return renderNoteModal(m);
@@ -1018,7 +1276,7 @@ function renderTxModal(m) {
           <label class="form-label">${txType==='income'?'Source':'Category'} *</label>
           ${txType==='income'?`
             <select class="form-input" id="tx-cat">
-              ${INCOME_SOURCES.map(s=>`<option value="${s.toLowerCase()}" ${(tx.source||'').toLowerCase()===s.toLowerCase()?'selected':''}>${s}</option>`).join('')}
+              ${appData.incomeCategories.map(c=>`<option value="${c.id}" ${tx.category===c.id?'selected':''}>${c.icon} ${c.name}</option>`).join('')}
             </select>
           `:`
           <select class="form-input" id="tx-cat">
@@ -1136,11 +1394,12 @@ function renderAddGoalAmtModal(m) {
   `;
 }
 
-function renderAddCatModal() {
+function renderAddCatModal(m) {
+  const kind = m?.kind||'expense';
   return `
     <div class="modal-overlay" id="modal-overlay">
       <div class="modal">
-        <h3 class="modal-title">🏷️ New Category</h3>
+        <h3 class="modal-title">🏷️ New ${kind==='income'?'Income':''} Category</h3>
         <div class="form-group"><label class="form-label">Category Name *</label><input class="form-input" id="cat-name" placeholder="e.g. Coffee ☕"></div>
         <div class="form-row">
           <div class="form-group"><label class="form-label">Icon (emoji)</label><input class="form-input" id="cat-icon" placeholder="📦" maxlength="4"></div>
@@ -1148,7 +1407,7 @@ function renderAddCatModal() {
         </div>
         <div class="modal-footer">
           <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-          <button class="btn btn-primary" id="cat-save">Add Category 🌸</button>
+          <button class="btn btn-primary" id="cat-save" data-kind="${kind}">Add Category 🌸</button>
         </div>
       </div>
     </div>
@@ -1156,11 +1415,13 @@ function renderAddCatModal() {
 }
 
 function renderEditCatModal(m) {
-  const cat = appData.categories.find(c=>c.id===m.catId)||{};
+  const kind = m.kind||'expense';
+  const list = kind==='income'?appData.incomeCategories:appData.categories;
+  const cat = list.find(c=>c.id===m.catId)||{};
   return `
     <div class="modal-overlay" id="modal-overlay">
       <div class="modal">
-        <h3 class="modal-title">✏️ Edit Category</h3>
+        <h3 class="modal-title">✏️ Edit ${kind==='income'?'Income':''} Category</h3>
         <div class="form-group"><label class="form-label">Category Name *</label><input class="form-input" id="cat-name" placeholder="e.g. Coffee ☕" value="${cat.name||''}"></div>
         <div class="form-row">
           <div class="form-group"><label class="form-label">Icon (emoji)</label><input class="form-input" id="cat-icon" placeholder="📦" maxlength="4" value="${cat.icon||''}"></div>
@@ -1168,7 +1429,7 @@ function renderEditCatModal(m) {
         </div>
         <div class="modal-footer">
           <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-          <button class="btn btn-primary" id="cat-save" data-edit-id="${cat.id}">Save Changes 🌸</button>
+          <button class="btn btn-primary" id="cat-save" data-edit-id="${cat.id}" data-kind="${kind}">Save Changes 🌸</button>
         </div>
       </div>
     </div>
@@ -1176,9 +1437,11 @@ function renderEditCatModal(m) {
 }
 
 function renderDeleteCatModal(m) {
-  const cat = appData.categories.find(c=>c.id===m.catId)||{name:'Unknown',icon:'📦'};
-  const affected = appData.transactions.filter(t=>t.type==='expense' && t.category===m.catId);
-  const otherCats = appData.categories.filter(c=>c.id!==m.catId);
+  const kind = m.kind||'expense';
+  const list = kind==='income'?appData.incomeCategories:appData.categories;
+  const cat = list.find(c=>c.id===m.catId)||{name:'Unknown',icon:'📦'};
+  const affected = appData.transactions.filter(t=>t.type===kind && t.category===m.catId);
+  const otherCats = list.filter(c=>c.id!==m.catId && c.id!=='savings');
   return `
     <div class="modal-overlay" id="modal-overlay">
       <div class="modal">
@@ -1186,7 +1449,7 @@ function renderDeleteCatModal(m) {
         <div style="background:var(--red);border-radius:12px;padding:.85rem 1rem;margin-bottom:1.1rem">
           <div style="font-size:.88rem;font-weight:500;color:var(--red-text);margin-bottom:.25rem">${cat.icon} ${cat.name}</div>
           ${affected.length>0
-            ? `<div style="font-size:.82rem;color:var(--red-text)"><strong>${affected.length} expense transaction${affected.length!==1?'s':''}</strong> use this category and will be affected.</div>`
+            ? `<div style="font-size:.82rem;color:var(--red-text)"><strong>${affected.length} ${kind} transaction${affected.length!==1?'s':''}</strong> use this category and will be affected.</div>`
             : `<div style="font-size:.82rem;color:var(--red-text)">No transactions use this category — safe to delete.</div>`
           }
         </div>
@@ -1204,7 +1467,7 @@ function renderDeleteCatModal(m) {
         <p style="font-size:.8rem;color:var(--text-soft);margin-bottom:.25rem">This action cannot be undone.</p>
         <div class="modal-footer">
           <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
-          <button class="btn btn-danger" id="cat-delete-confirm" data-id="${m.catId}" ${affected.length>0&&otherCats.length===0?'disabled title="Add another category first to reassign transactions"':''}>Delete Category</button>
+          <button class="btn btn-danger" id="cat-delete-confirm" data-id="${m.catId}" data-kind="${kind}" ${affected.length>0&&otherCats.length===0?'disabled title="Add another category first to reassign transactions"':''}>Delete Category</button>
         </div>
       </div>
     </div>
@@ -1271,8 +1534,97 @@ let charts = {};
 function destroyCharts() { Object.values(charts).forEach(c=>{try{c.destroy()}catch(e){}}); charts={}; }
 
 function renderCharts() {
-  if(state.view!=='dashboard') return;
-  setTimeout(()=>{ destroyCharts(); renderPieChart(); renderTrendChart(); renderSavingsChart(); }, 50);
+  if(state.view==='dashboard') {
+    setTimeout(()=>{ destroyCharts(); renderPieChart(); renderTrendChart(); renderSavingsChart(); }, 50);
+  } else if(state.view==='reports') {
+    setTimeout(()=>{ destroyCharts(); renderDefaultCompareChart(); reportWidgets.forEach(w=>renderWidgetChart(w)); }, 50);
+  }
+}
+
+function metricDatasetColors(theme) {
+  return theme==='dark'
+    ? ['rgba(168,216,168,.75)','rgba(245,160,160,.75)','rgba(200,185,232,.75)','rgba(168,200,232,.75)']
+    : ['rgba(168,216,168,.75)','rgba(233,165,181,.75)','rgba(200,185,232,.75)','rgba(168,200,232,.75)'];
+}
+
+function renderDefaultCompareChart() {
+  const canvas = document.getElementById('defaultCompareChart'); if(!canvas) return;
+  const now = new Date(); const curY = now.getFullYear(), curM = now.getMonth();
+  const prevDate = new Date(curY, curM-1, 1); const prevY = prevDate.getFullYear(), prevM = prevDate.getMonth();
+  const cur = getMonthMetrics(curY, curM);
+  const prev = getMonthMetrics(prevY, prevM);
+  const labels = ['Income','Expenses','Savings','Net Balance'];
+  const curLabel = now.toLocaleString('default',{month:'short',year:'numeric'});
+  const prevLabel = prevDate.toLocaleString('default',{month:'short',year:'numeric'});
+  const tickColor = appData.theme==='dark' ? '#D0D0D0' : '#7A4E63';
+  const gridColor = appData.theme==='dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.04)';
+  charts.defaultCompare = new Chart(canvas,{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:prevLabel, data:[prev.income,prev.expense,prev.savings,prev.balance], backgroundColor:'rgba(176,136,153,.55)', borderRadius:6, borderSkipped:false},
+      {label:curLabel, data:[cur.income,cur.expense,cur.savings,cur.balance], backgroundColor:'rgba(212,114,142,.85)', borderRadius:6, borderSkipped:false},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'top',labels:{color:tickColor,font:{size:11}}}},scales:{x:{grid:{display:false},ticks:{color:tickColor}},y:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtShort(v)}}}}
+  });
+}
+
+function renderWidgetChart(w) {
+  const canvas = document.getElementById(`widget-chart-${w.id}`); if(!canvas) return;
+  const a = parseMonthKey(w.monthA), b = parseMonthKey(w.monthB);
+  const ma = getMonthMetrics(a.year, a.month), mb = getMonthMetrics(b.year, b.month);
+  const labels = ['Income','Expenses','Savings','Net Balance'];
+  const labelA = monthKeyLabel(w.monthA), labelB = monthKeyLabel(w.monthB);
+  const tickColor = appData.theme==='dark' ? '#D0D0D0' : '#7A4E63';
+  const gridColor = appData.theme==='dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.04)';
+  const isCircular = w.chartType==='pie' || w.chartType==='doughnut';
+
+  let chartConfig;
+  if(isCircular) {
+    // Pie/doughnut can't group two series per category like bar/line can,
+    // so each metric is split into its Month A and Month B slice so both
+    // sides of the comparison are still visible at a glance. Month A uses
+    // a muted shade, Month B the full-strength shade, mirroring the
+    // muted-vs-bold convention used in the bar/line views.
+    const metricKeys = ['income','expense','savings','balance'];
+    const baseColors = metricDatasetColors(appData.theme);
+    const circLabels = [];
+    const circData = [];
+    const circColors = [];
+    labels.forEach((l,i)=>{
+      circLabels.push(`${l} · ${labelA}`); circData.push(Math.abs(ma[metricKeys[i]])); circColors.push(baseColors[i].replace(/,\.75\)$/, ',.35)'));
+      circLabels.push(`${l} · ${labelB}`); circData.push(Math.abs(mb[metricKeys[i]])); circColors.push(baseColors[i]);
+    });
+    chartConfig = {
+      type:w.chartType,
+      data:{labels:circLabels, datasets:[{
+        data:circData,
+        backgroundColor:circColors,
+        borderWidth:2, borderColor: appData.theme==='dark' ? '#1E1E1E' : '#FFF8F2'
+      }]},
+      options:{responsive:true,maintainAspectRatio:false, cutout: w.chartType==='doughnut'?'55%':0,
+        plugins:{legend:{display:true,position:'bottom',labels:{color:tickColor,font:{size:9},boxWidth:10}}}}
+    };
+  } else if(w.chartType==='line') {
+    chartConfig = {
+      type:'line',
+      data:{labels, datasets:[
+        {label:labelA, data:[ma.income,ma.expense,ma.savings,ma.balance], borderColor:'#B08899', backgroundColor:'rgba(176,136,153,.12)', tension:.35, pointRadius:4, borderDash:[4,3]},
+        {label:labelB, data:[mb.income,mb.expense,mb.savings,mb.balance], borderColor:'#D4728E', backgroundColor:'rgba(212,114,142,.12)', tension:.35, pointRadius:4},
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'top',labels:{color:tickColor,font:{size:11}}}},scales:{x:{grid:{display:false},ticks:{color:tickColor}},y:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtShort(v)}}}}
+    };
+  } else {
+    // bar
+    chartConfig = {
+      type:'bar',
+      data:{labels, datasets:[
+        {label:labelA, data:[ma.income,ma.expense,ma.savings,ma.balance], backgroundColor:'rgba(176,136,153,.55)', borderRadius:6, borderSkipped:false},
+        {label:labelB, data:[mb.income,mb.expense,mb.savings,mb.balance], backgroundColor:'rgba(212,114,142,.85)', borderRadius:6, borderSkipped:false},
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'top',labels:{color:tickColor,font:{size:11}}}},scales:{x:{grid:{display:false},ticks:{color:tickColor}},y:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtShort(v)}}}}
+    };
+  }
+  charts[`widget-${w.id}`] = new Chart(canvas, chartConfig);
 }
 
 function renderPieChart() {
@@ -1357,9 +1709,9 @@ function attachEvents() {
     if(!amount||amount<=0||!date||!catVal){alert('Please fill in required fields.');return;}
     if(state.modal?.type==='edit-tx'){
       const tx=appData.transactions.find(t=>t.id===state.modal.tx.id);
-      if(tx){tx.amount=amount;tx.date=date;tx.notes=notes;tx.type=txType;if(txType==='income'){tx.source=catVal;tx.category='other';}else{tx.category=catVal;tx.source='';}}
+      if(tx){tx.amount=amount;tx.date=date;tx.notes=notes;tx.type=txType;tx.category=catVal;tx.source=txType==='income'?(getCat(catVal,'income').name):'';}
     } else {
-      appData.transactions.push({id:genId(),type:txType,amount,date,notes,category:txType==='income'?'other':catVal,source:txType==='income'?catVal:''});
+      appData.transactions.push({id:genId(),type:txType,amount,date,notes,category:catVal,source:txType==='income'?(getCat(catVal,'income').name):''});
     }
     saveData(appData);setState({modal:null});
   });
@@ -1368,6 +1720,10 @@ function attachEvents() {
   document.getElementById('add-tx-btn')?.addEventListener('click',()=>setState({modal:{type:'add-tx',txType:'expense'}}));
   document.querySelectorAll('.tab[data-filter]').forEach(el=>el.addEventListener('click',()=>setState({txFilter:el.dataset.filter})));
   document.getElementById('tx-search')?.addEventListener('input',e=>setState({txSearch:e.target.value}));
+  document.getElementById('tx-date-exact')?.addEventListener('change',e=>setState({txDateExact:e.target.value,txDateStart:'',txDateEnd:''}));
+  document.getElementById('tx-date-start')?.addEventListener('change',e=>setState({txDateStart:e.target.value,txDateExact:''}));
+  document.getElementById('tx-date-end')?.addEventListener('change',e=>setState({txDateEnd:e.target.value,txDateExact:''}));
+  document.getElementById('tx-clear-filters-btn')?.addEventListener('click',()=>setState({txSearch:'',txFilter:'all',txDateExact:'',txDateStart:'',txDateEnd:''}));
   document.querySelectorAll('.edit-tx-btn').forEach(el=>el.addEventListener('click',()=>{const tx=appData.transactions.find(t=>t.id==el.dataset.id);if(tx)setState({modal:{type:'edit-tx',tx,txType:tx.type}});}));
   document.querySelectorAll('.del-tx-btn').forEach(el=>el.addEventListener('click',()=>{if(!confirm('Delete this transaction?'))return;appData.transactions=appData.transactions.filter(t=>t.id!=el.dataset.id);saveData(appData);render();}));
 
@@ -1447,37 +1803,43 @@ function attachEvents() {
   }));
 
   // Categories
-  document.getElementById('add-cat-btn')?.addEventListener('click',()=>setState({modal:{type:'add-cat'}}));
+  document.getElementById('add-cat-btn')?.addEventListener('click',()=>setState({modal:{type:'add-cat',kind:'expense'}}));
+  document.getElementById('add-income-cat-btn')?.addEventListener('click',()=>setState({modal:{type:'add-cat',kind:'income'}}));
   document.getElementById('cat-save')?.addEventListener('click',function(){
     const name=document.getElementById('cat-name')?.value;
     const icon=document.getElementById('cat-icon')?.value||'📦';
     const color=document.getElementById('cat-color')?.value||'#F8D7E6';
     if(!name){alert('Please enter a category name.');return;}
+    const kind=this.dataset.kind||'expense';
+    const list=kind==='income'?appData.incomeCategories:appData.categories;
     const editId=this.dataset.editId;
     if(editId){
-      const cat=appData.categories.find(c=>c.id===editId);
+      const cat=list.find(c=>c.id===editId);
       if(cat){cat.name=name;cat.icon=icon;cat.color=color;}
     } else {
       const id=name.toLowerCase().replace(/[^a-z0-9]/g,'_')+'_'+Date.now();
-      appData.categories.push({id,name,icon,color});
+      list.push({id,name,icon,color});
     }
     saveData(appData);setState({modal:null});
   });
   document.querySelectorAll('.edit-cat-btn').forEach(el=>el.addEventListener('click',()=>{
-    setState({modal:{type:'edit-cat',catId:el.dataset.id}});
+    setState({modal:{type:'edit-cat',catId:el.dataset.id,kind:el.dataset.kind}});
   }));
   document.querySelectorAll('.del-cat-btn').forEach(el=>el.addEventListener('click',()=>{
-    setState({modal:{type:'delete-cat',catId:el.dataset.id}});
+    setState({modal:{type:'delete-cat',catId:el.dataset.id,kind:el.dataset.kind}});
   }));
   document.getElementById('cat-delete-confirm')?.addEventListener('click',function(){
     const catId=this.dataset.id;
-    const affected=appData.transactions.filter(t=>t.type==='expense'&&t.category===catId);
+    const kind=this.dataset.kind||'expense';
+    const list=kind==='income'?appData.incomeCategories:appData.categories;
+    const affected=appData.transactions.filter(t=>t.type===kind&&t.category===catId);
     if(affected.length>0){
       const reassignTo=document.getElementById('cat-reassign')?.value;
       if(!reassignTo){alert('Please select a category to reassign transactions to.');return;}
-      appData.transactions.forEach(t=>{if(t.type==='expense'&&t.category===catId)t.category=reassignTo;});
+      appData.transactions.forEach(t=>{if(t.type===kind&&t.category===catId)t.category=reassignTo;});
     }
-    appData.categories=appData.categories.filter(c=>c.id!==catId);
+    if(kind==='income'){appData.incomeCategories=list.filter(c=>c.id!==catId);}
+    else{appData.categories=list.filter(c=>c.id!==catId);}
     saveData(appData);setState({modal:null});
   });
 
@@ -1501,19 +1863,84 @@ function attachEvents() {
     await deleteAccount();
   });
 
+  // Custom Comparison Widgets (Reports page)
+  document.getElementById('add-widget-btn')?.addEventListener('click',()=>{
+    const monthOpts = monthOptionsList(12);
+    const widget = {
+      id: Date.now(),
+      monthA: monthOpts[1] ? monthOpts[1].value : monthOpts[0].value, // previous month
+      monthB: monthOpts[0].value, // current month
+      chartType: 'bar',
+    };
+    reportWidgets.push(widget);
+    saveReportWidgets(reportWidgets);
+    render();
+  });
+  document.querySelectorAll('.del-widget-btn').forEach(el=>el.addEventListener('click',()=>{
+    if(!confirm('Delete this widget?')) return;
+    const id = parseInt(el.dataset.id);
+    reportWidgets = reportWidgets.filter(w=>w.id!==id);
+    saveReportWidgets(reportWidgets);
+    render();
+  }));
+  document.querySelectorAll('.widget-monthA').forEach(el=>el.addEventListener('change',()=>{
+    const id = parseInt(el.dataset.id);
+    const w = reportWidgets.find(w=>w.id===id); if(!w) return;
+    w.monthA = el.value;
+    saveReportWidgets(reportWidgets);
+    if(charts[`widget-${w.id}`]) { try{charts[`widget-${w.id}`].destroy();}catch(e){} delete charts[`widget-${w.id}`]; }
+    renderWidgetChart(w);
+  }));
+  document.querySelectorAll('.widget-monthB').forEach(el=>el.addEventListener('change',()=>{
+    const id = parseInt(el.dataset.id);
+    const w = reportWidgets.find(w=>w.id===id); if(!w) return;
+    w.monthB = el.value;
+    saveReportWidgets(reportWidgets);
+    if(charts[`widget-${w.id}`]) { try{charts[`widget-${w.id}`].destroy();}catch(e){} delete charts[`widget-${w.id}`]; }
+    renderWidgetChart(w);
+  }));
+  document.querySelectorAll('.widget-charttype').forEach(el=>el.addEventListener('change',()=>{
+    const id = parseInt(el.dataset.id);
+    const w = reportWidgets.find(w=>w.id===id); if(!w) return;
+    w.chartType = el.value;
+    saveReportWidgets(reportWidgets);
+    if(charts[`widget-${w.id}`]) { try{charts[`widget-${w.id}`].destroy();}catch(e){} delete charts[`widget-${w.id}`]; }
+    renderWidgetChart(w);
+  }));
+
   // Export
   document.querySelectorAll('.export-btn').forEach(el=>el.addEventListener('click',()=>{
     const f=el.dataset.format;
-    const txs=appData.transactions;
+    const period=el.dataset.period||'all';
+    const now=new Date();
+    const curY=now.getFullYear(),curM=now.getMonth();
+    const prevDate=new Date(curY,curM-1,1);
+    const prevY=prevDate.getFullYear(),prevM=prevDate.getMonth();
+    const q=Math.ceil((curM+1)/3);
+    let txs=appData.transactions;
+    let fileSuffix='all';
+    if(period==='current'){
+      txs=txs.filter(t=>isThisMonth(t.date));
+      fileSuffix=now.toLocaleString('default',{month:'short',year:'numeric'}).replace(' ','_');
+    } else if(period==='prev'){
+      txs=txs.filter(t=>{const d=new Date(t.date);return d.getFullYear()===prevY&&d.getMonth()===prevM;});
+      fileSuffix=prevDate.toLocaleString('default',{month:'short',year:'numeric'}).replace(' ','_');
+    } else if(period==='quarter'){
+      txs=txs.filter(t=>{const d=new Date(t.date);const tq=Math.ceil((d.getMonth()+1)/3);return d.getFullYear()===curY&&tq===q;});
+      fileSuffix=`Q${q}_${curY}`;
+    } else if(period==='annual'){
+      txs=txs.filter(t=>new Date(t.date).getFullYear()===curY);
+      fileSuffix=String(curY);
+    }
     let content,filename,mime;
     if(f==='csv'){
-      const rows=[['Date','Type','Category','Amount (₹)','Source','Notes'],...txs.map(t=>[t.date,t.type,getCat(t.category).name,t.amount,t.source||'',t.notes||''])];
-      content=rows.map(r=>r.map(v=>`"${v}"`).join(',')).join('\n');filename='hobi_transactions.csv';mime='text/csv';
+      const rows=[['Date','Type','Category','Amount (₹)','Source','Notes'],...txs.map(t=>[t.date,t.type,getCat(t.category, t.type).name,t.amount,t.source||'',t.notes||''])];
+      content=rows.map(r=>r.map(v=>`"${v}"`).join(',')).join('\n');filename=`hobi_${fileSuffix}.csv`;mime='text/csv';
     } else if(f==='json'){
-      content=JSON.stringify(txs,null,2);filename='hobi_transactions.json';mime='application/json';
+      content=JSON.stringify(txs,null,2);filename=`hobi_${fileSuffix}.json`;mime='application/json';
     } else {
-      content=txs.map(t=>`${t.date} | ${t.type.toUpperCase()} | ${getCat(t.category).name} | ₹${t.amount} | ${t.notes||''}`).join('\n');
-      filename='hobi_report.txt';mime='text/plain';
+      content=txs.map(t=>`${t.date} | ${t.type.toUpperCase()} | ${getCat(t.category, t.type).name} | ₹${t.amount} | ${t.notes||''}`).join('\n');
+      filename=`hobi_report_${fileSuffix}.txt`;mime='text/plain';
     }
     const blob=new Blob([content],{type:mime});
     const url=URL.createObjectURL(blob);
